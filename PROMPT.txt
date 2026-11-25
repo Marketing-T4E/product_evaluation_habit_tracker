@@ -1,0 +1,87 @@
+Si. Lo subire a Vercel con una base en Supabase. El prompt tiene que estar completo para que Claude code lo arme todo y solo me diga que hace falta hacerle con la configuración inicial
+
+```
+Construye una aplicación web completa de seguimiento de hábitos (habit tracker), multiusuario, con datos privados por usuario, lista para desplegar en Vercel con Supabase como backend. Implementa todo de principio a fin sin pedirme aprobación entre fases. Solo detente si encuentras una ambigüedad que bloquee el trabajo; en ese caso, toma la decisión más razonable, documéntala y sigue.
+
+Al terminar, tu único mensaje final debe ser un resumen breve de lo construido y la lista exacta de pasos de configuración inicial que yo debo hacer manualmente (detallados en la sección 8).
+
+## 1. Stack (obligatorio)
+- Next.js (App Router) + TypeScript, desplegable en Vercel sin configuración extra.
+- Supabase para base de datos (PostgreSQL) y autenticación (Supabase Auth).
+- ＠supabase/ssr para manejar la sesión en Server Components, Server Actions, Route Handlers y middleware.
+- Tailwind CSS para estilos.
+- Recharts para gráficos.
+- Zod para validación de formularios y datos.
+- Vitest para tests unitarios.
+- Migraciones SQL versionadas en `supabase/migrations/` (compatibles con Supabase CLI).
+
+## 2. Autenticación y privacidad
+- Registro con nombre, email y contraseña usando Supabase Auth.
+- Login, logout y sesión persistente.
+- Página de "olvidé mi contraseña" y de restablecimiento.
+- Ruta `/auth/callback` para manejar la confirmación de email y el restablecimiento de contraseña.
+- Middleware que protege todas las rutas privadas y redirige al login si no hay sesión.
+- Tabla `profiles` (id = auth.users.id, nombre, zona horaria, umbral de streak) creada automáticamente con un trigger al registrarse un usuario.
+- Aislamiento de datos a nivel de base de datos: activa Row Level Security (RLS) en TODAS las tablas, con políticas que solo permitan a cada usuario leer, crear, editar y borrar sus propias filas (`user_id = auth.uid()`). Además, valida la propiedad en el servidor. Nunca uses la service role key en el cliente ni la expongas con prefijo NEXT_PUBLIC.
+- Detecta la zona horaria del navegador al registrarse y guárdala en el perfil (editable en ajustes).
+
+## 3. Vista principal: "Hoy"
+Al iniciar sesión, el usuario ve sus hábitos del día:
+- Hábitos programados para hoy según su frecuencia, con un checkbox para marcarlos como cumplidos y poder desmarcarlos.
+- Hábitos flexibles semanales (ej. "gimnasio 4 de 7 días") se muestran todos los días de la semana con su progreso, ej. "2/4 esta semana". Al alcanzar la meta se muestran como cumplidos, pero se pueden seguir registrando.
+- Progreso del día (ej. "3 de 5 completados") y el streak global actual.
+- Navegación a días anteriores (hasta 7 días atrás) para registrar hábitos olvidados. No se pueden registrar días futuros.
+- Actualizaciones optimistas en la UI al marcar un hábito.
+
+## 4. Crear y editar hábitos
+Formulario con: nombre, descripción opcional, color, ícono (emoji), fecha de inicio y tipo de frecuencia:
+- Diario: todos los días.
+- Día por medio: cada 2 días a partir de la fecha de inicio.
+- Semanal: días específicos de la semana (ej. lunes y jueves).
+- Quincenal: cada dos semanas, en el día de la semana elegido, contando desde la fecha de inicio.
+- Mensual: un día específico del mes (si el mes no tiene ese día, usar el último día del mes).
+- Flexible semanal: X veces por semana sin día fijo (ej. 4 de 7). La semana empieza el lunes.
+Además: editar, archivar (conserva el historial y deja de aparecer en "Hoy"), restaurar y eliminar (con confirmación).
+
+Modela la frecuencia de forma extensible: columnas `frequency_type` (enum) y `frequency_config` (jsonb), validadas con Zod.
+
+## 5. Streaks
+- Streak global: un día cuenta si el usuario cumple un umbral de los hábitos programados ese día. El umbral se configura en ajustes (por defecto 100%; opciones de 50% a 100%).
+- Los días sin hábitos programados no rompen ni suman al streak.
+- El día de hoy no rompe el streak mientras no haya terminado.
+- Los hábitos flexibles semanales no entran en el cálculo diario; se evalúan al cerrar la semana, y una semana fallida rompe el streak global en el último día de esa semana.
+- Mostrar streak actual y récord.
+- Cada hábito tiene su propio streak individual en su unidad natural (días, semanas o meses según su frecuencia), con actual y récord.
+
+## 6. Métricas (página "Estadísticas")
+- Tasa de cumplimiento global y por hábito: últimos 7 días, 30 días, 90 días y todo el historial.
+- Heatmap estilo GitHub con el % de cumplimiento de cada día del último año.
+- Gráfico de tendencia semanal del % de cumplimiento.
+- Streak actual y récord por hábito.
+- Mejor y peor día de la semana.
+- Ranking de hábitos más y menos cumplidos.
+Las métricas solo consideran los días en que cada hábito estaba programado y activo (desde su fecha de inicio y antes de archivarse).
+
+## 7. Requisitos técnicos
+- "Hoy" siempre se calcula en la zona horaria del perfil del usuario, nunca en UTC del servidor (importante en Vercel).
+- Guarda los registros de cumplimiento con una columna `date` (fecha local del usuario) y una restricción única (habit_id, date).
+- Toda la lógica de programación de hábitos ("¿le toca a este hábito el día X?"), streaks y métricas va en funciones puras en `lib/` sin dependencias de Supabase, con tests de Vitest que cubran cada tipo de frecuencia y casos borde: cambio de mes, años bisiestos, meses de 28/30/31 días, semanas que cruzan meses y años, hábitos archivados, umbral parcial y hábitos creados a mitad de semana.
+- Índices en la base de datos para las consultas frecuentes (user_id, habit_id, date).
+- Diseño responsive pensado primero para móvil, con modo claro y oscuro.
+- Estados de carga, vacíos (ej. "aún no tienes hábitos") y manejo de errores en todas las pantallas.
+- Script de seed en `supabase/seed.sql` que cree hábitos de ejemplo con 60 días de historial para un usuario existente (indicando cómo ejecutarlo).
+- `.env.example` con todas las variables necesarias.
+- Asegúrate de que `npm run build`, `npm run lint` y `npm test` pasen sin errores antes de terminar.
+
+## 8. Entregable final: guía de configuración
+Crea un archivo `SETUP.md` y repite su contenido en tu mensaje final. Debe incluir, paso a paso y en orden, todo lo que yo debo hacer manualmente:
+1. Crear el proyecto en Supabase y dónde encontrar la URL y las llaves.
+2. Cómo aplicar las migraciones (con Supabase CLI y, como alternativa, pegando el SQL en el SQL Editor).
+3. Configuración de Supabase Auth: Site URL, Redirect URLs (local y de Vercel), confirmación de email y plantillas si aplica.
+4. Variables de entorno: cuáles van en `.env.local` y cuáles en Vercel, con sus nombres exactos.
+5. Cómo correr el proyecto localmente.
+6. Cómo desplegar en Vercel conectando el repositorio de GitHub.
+7. Cómo ejecutar el seed opcional.
+8. Una checklist de verificación después del despliegue (registro, login, aislamiento entre dos usuarios, creación de hábitos).
+No incluyas en esta guía nada que tú ya hayas hecho en el código.
+```
